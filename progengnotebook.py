@@ -57,7 +57,7 @@ optimizer (функция оптимизации) - агоритм "подгон
 metrics (метрики) - используются для мониторинга процесса тренировки и тестирования, metrics=['accuracy'] значит, что мы будем вычислять в модели не только функцию штрафа, но и число правильно классифицированных примеров
 """
 
-print("Если у вас уже есть модель ее можно загрузить, если нет нажмите 'cancel unload'.\n")
+print("Если у вас уже есть модель ее можно загрузить, если нет нажмите 'cancel upload'.\n")
 mod = files.upload()
 
 pt = !ls
@@ -103,7 +103,7 @@ else:
   print(model.summary())
 
   #Обучаем модель
-  model.fit(x_train,y_train,epochs=5)
+  model.fit(x_train,y_train,epochs=10)
   #Сохраняем модель
   model.save('my_model.h5')
   #Для удаления старой модели:
@@ -122,14 +122,14 @@ from copy import deepcopy
 
 def count_spot_stack(image, x, y): #количественная оценка "пятна"
   mx, my = image.shape
-  res=0
   xl, xr, yl, yr = x, x, y, y
   stack={(x, y)}
+  res=1
   while stack:
     pixel=stack.pop()
-    if not image[pixel]:
-      res+=1
+    if image[pixel]==0:
       x, y = pixel
+      res+=1
 
       if x < xl:
         xl = x
@@ -141,84 +141,26 @@ def count_spot_stack(image, x, y): #количественная оценка "�
         yr = y
 
       stack|=set(pix for pix in [(x-1, y), (x+1, y), (x, y-1), (x, y+1)] if (0<=pix[0]<mx and 0<=pix[1]<my))
-      image[pixel]=True
-  del stack
-  return {"value": res, "bounds": (xl, xr, yl, yr)}
+      image[pixel]=255
 
-def find_spots(image): #Поиск пятен на изображении
-  id=0
-  for x in range(image.shape[0]):
-    for y in range(image.shape[1]):
+  del stack
+  return (xl, xr, yl, yr)
+
+def find_spots(image): #Поиск цифр на изображении
+  for y in range(image.shape[1]):
+    for x in range(image.shape[0]):
       if image[x, y]==0:
         mask=deepcopy(image)
-        temp = count_spot_stack(image, x, y)
-        xl, xr, yl, yr = temp["bounds"]
-        xx=(xr-xl+1)//28*3
-        yy=(yr-yl+1)//28*3
-        xl-=xx
+        xl, xr, yl, yr = count_spot_stack(image, x, y)
+        xx=((xr-xl+1)//28)*3
+        yy=((yr-yl+1)//28)*3
+        xl=max(xl-xx, 0)
         xr+=xx
-        yl-=yy
+        yl=max(yl-yy, 0)
         yr+=yy
-        mask&=image
-        yield {"id": id} | temp | {"mask": deepcopy(mask[xl:xr+1, yl:yr+1])}
+        mask^=~image
+        yield deepcopy(mask[xl:xr+1, yl:yr+1])
         del mask
-        id+=1
-
-def color_spots(image, color, spots): #Окрашивание набора пятен в один цвет
-  try:
-    img=cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-  except:
-    img=deepcopy(image)
-
-  color=tuple(reversed(color))
-  mask_bin=np.full(image.shape[:2], True)
-  mask1=img*0
-  for spot in spots:
-    xl, xr, yl, yr = spot["bounds"]
-    mask_bin[xl:xr+1, yl:yr+1]+=spot["mask"]
-  mask2=deepcopy(img)
-  mask2[:, :]=0
-  mask2[mask_bin==True]=(255, 255, 255)
-  mask1=mask2/np.array([255,255,255])
-  img[mask_bin==True]=(255, 255, 255)
-  return img*(1-mask1+mask1*np.array(color)/np.array([255,255,255]))
-
-
-
-def color_spots_cond(image, spots, color_cond): #Окрашивание набора пятен в зависимости от указанных в color_cond условий
-  try:
-    img=cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-  except:
-    img=deepcopy(image)
-
-  color_cond={tuple(reversed(color)): cond for color, cond in color_cond.items()}
-  if (255, 255, 255) not in color_cond:
-      color_cond|={(255, 255, 255): lambda spot: True}
-  masks_bin={color: np.full(img.shape[:2], 0) for color in color_cond}
-  mask1=img*0
-  for spot in spots:
-    xl, xr, yl, yr = spot["bounds"]
-    for color, cond in color_cond.items():
-      if cond(spot):
-        masks_bin[color][xl:xr+1, yl:yr+1]+=spot["mask"]
-        break
-  for color, mask_bin in masks_bin.items():
-    img[mask_bin==255]=color
-
-  return img
-
-
-def make_table(spots, word_cond):
-    df=pd.DataFrame([{"id": spot["id"], "value":spot["value"], "left":spot["bounds"][0], "up":spot["bounds"][2], "right":spot["bounds"][1], "down":spot["bounds"][3]} for spot in spots])
-    word_cond=word_cond|{"Вне классификации" : lambda spot: True}
-    words=[]
-    for spot in spots:
-        for word, cond in word_cond.items():
-            if cond(spot):
-                words.append(word)
-                break
-    df["word"] = words
-    return df
 
 porog=255-75
 
@@ -236,7 +178,7 @@ img2.dtype=np.uint8
 
 result=""
 for spot in find_spots(deepcopy(img2)):
-  temp=cv2.resize(spot["mask"], (28,28), interpolation = cv2.INTER_AREA)
+  temp=cv2.resize(spot, (28,28), interpolation = cv2.INTER_AREA)
   temp=temp.reshape(1,28,28,1)
   temp=1-temp/255
   prediction = model.predict([temp], verbose=0)[0]
